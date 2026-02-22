@@ -4,6 +4,15 @@ import * as cheerio from 'cheerio';
 const MAX_PAGES = 25;
 const MAX_CONTENT_CHARS = 120_000;
 
+/** Browser-like headers to reduce blocking by anti-bot / anti-crawler systems */
+const CRAWL_HEADERS: HeadersInit = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  Accept:
+    'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
+
 export interface PageContent {
   url: string;
   text: string;
@@ -21,10 +30,11 @@ export class CrawlService {
       const url = queue.shift()!;
       try {
         const res = await fetch(url, {
-          headers: { 'User-Agent': 'RankGEO-Bot/1.0' },
+          headers: CRAWL_HEADERS,
           signal: AbortSignal.timeout(15_000),
         });
-        if (!res.ok || !res.headers.get('content-type')?.includes('text/html'))
+        const contentType = res.headers.get('content-type') ?? '';
+        if (!res.ok || !contentType.includes('text/html'))
           continue;
 
         const html = await res.text();
