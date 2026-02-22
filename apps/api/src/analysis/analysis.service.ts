@@ -6,7 +6,9 @@ import { CrawlService } from '../crawl/crawl.service';
 import { z } from 'zod';
 import type { GeoScoreResult, WebSearchCallResult } from './geo-score.types';
 
-const promptsSchema = z.object({ prompts: z.array(z.string()).length(10) });
+const promptsSchema = z.object({
+  prompts: z.array(z.string()).min(1).max(10),
+});
 
 @Injectable()
 export class AnalysisService {
@@ -46,6 +48,7 @@ Provide:
   }
 
   async generateSearchPrompts(analysis: WebsiteAnalysis): Promise<string[]> {
+    const numSearchPrompts = Math.min(10, Math.max(1, parseInt(process.env.NUM_SEARCH_PROMPTS ?? '10', 10) || 10));
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('OPENAI_API_KEY is not set');
 
@@ -55,7 +58,7 @@ Provide:
       experimental_output: Output.object({
         schema: promptsSchema,
       }),
-      prompt: `You are generating exactly 10 human-like prompts that a real customer would type into ChatGPT to get recommendations for products or services.
+      prompt: `You are generating exactly ${numSearchPrompts} human-like prompts that a real customer would type into ChatGPT to get recommendations for products or services.
 
 Business context:
 - Sector: ${analysis.sectorOfActivity}
@@ -63,11 +66,11 @@ Business context:
 - Description: ${analysis.businessDescription}
 - Website structure: ${analysis.websiteStructure}
 
-Generate exactly 10 diverse, natural prompts that such a customer would use to find product recommendations in the same space (e.g. "Best project management software for small teams", "Top CRM for startups"). Each prompt should be one sentence, as if typed into a search or chat. Return them in the "prompts" array.`,
+Generate exactly ${numSearchPrompts} diverse, natural prompts that such a customer would use to find product recommendations in the same space (e.g. "Best project management software for small teams", "Top CRM for startups"). Each prompt should be one sentence, as if typed into a search or chat. Return them in the "prompts" array.`,
     });
 
     const out = experimental_output as { prompts: string[] };
-    return Array.isArray(out?.prompts) ? out.prompts.slice(0, 10) : [];
+    return Array.isArray(out?.prompts) ? out.prompts.slice(0, numSearchPrompts) : [];
   }
 
   async runGeoScorePipeline(
@@ -111,12 +114,20 @@ Generate exactly 10 diverse, natural prompts that such a customer would use to f
             (100 * promptsWhereSiteAppeared) / sourcesPerPrompt.length,
           );
 
+    const countByUrl = new Map<string, number>();
+    for (const u of allSources) {
+      countByUrl.set(u, (countByUrl.get(u) ?? 0) + 1);
+    }
+    const sources = [...countByUrl.entries()]
+      .map(([url, count]) => ({ url, count }))
+      .sort((a, b) => b.count - a.count);
+
     return {
       score,
       internalPrompts: allInternalPrompts,
       generatedPrompts,
       analysis,
-      allSources: [...new Set(allSources)],
+      sources,
     };
   }
 

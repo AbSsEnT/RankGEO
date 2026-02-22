@@ -10,7 +10,7 @@ export interface GeoScoreResult {
   internalPrompts: string[];
   generatedPrompts: string[];
   analysis?: WebsiteAnalysis;
-  allSources?: string[];
+  sources: { url: string; count: number }[];
 }
 
 export interface WebSearchCallResult {
