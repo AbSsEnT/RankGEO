@@ -15,7 +15,7 @@ class AnalyzeDto {
 
 class GeoScoreDto {
   url!: string;
-  analysis?: WebsiteAnalysis;
+  analysis!: WebsiteAnalysis;
 }
 
 @Controller('analyze')
@@ -43,6 +43,9 @@ export class AnalysisController {
     const url = dto?.url?.trim();
     if (!url) {
       throw new BadRequestException('URL is required');
+    }
+    if (!dto?.analysis) {
+      throw new BadRequestException('Analysis is required. Run POST /analyze first.');
     }
     try {
       return await this.analysisService.runGeoScorePipeline(url, dto.analysis);

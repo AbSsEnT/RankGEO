@@ -2,7 +2,7 @@ import type { WebsiteAnalysis } from './analysis.schema';
 
 export interface GeoScoreRequestBody {
   url: string;
-  analysis?: WebsiteAnalysis;
+  analysis: WebsiteAnalysis;
 }
 
 export interface GeoScoreResult {

@@ -72,13 +72,12 @@ Generate exactly 10 diverse, natural prompts that such a customer would use to f
 
   async runGeoScorePipeline(
     url: string,
-    analysis?: WebsiteAnalysis,
+    analysis: WebsiteAnalysis,
   ): Promise<GeoScoreResult> {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('OPENAI_API_KEY is not set');
 
-    const analysisResult = analysis ?? (await this.analyzeWebsite(url));
-    const generatedPrompts = await this.generateSearchPrompts(analysisResult);
+    const generatedPrompts = await this.generateSearchPrompts(analysis);
     if (generatedPrompts.length === 0) {
       throw new Error('Failed to generate search prompts');
     }
@@ -116,7 +115,7 @@ Generate exactly 10 diverse, natural prompts that such a customer would use to f
       score,
       internalPrompts: allInternalPrompts,
       generatedPrompts,
-      analysis: analysisResult,
+      analysis,
       allSources: [...new Set(allSources)],
     };
   }
