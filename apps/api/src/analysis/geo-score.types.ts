@@ -14,6 +14,7 @@ export interface SourcesByDomain {
 
 export interface GeoScoreResult {
   score: number;
+  numSearchPrompts: number;
   internalPrompts: string[];
   generatedPrompts: string[];
   analysis?: WebsiteAnalysis;

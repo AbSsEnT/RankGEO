@@ -14,6 +14,10 @@ const promptsSchema = z.object({
 export class AnalysisService {
   constructor(private readonly crawlService: CrawlService) {}
 
+  getNumSearchPrompts(): number {
+    return Math.min(10, Math.max(1, parseInt(process.env.NUM_SEARCH_PROMPTS ?? '10', 10) || 10));
+  }
+
   async analyzeWebsite(url: string): Promise<WebsiteAnalysis> {
     const pages = await this.crawlService.crawlSite(url);
     if (pages.length === 0) {
@@ -48,7 +52,7 @@ Provide:
   }
 
   async generateSearchPrompts(analysis: WebsiteAnalysis): Promise<string[]> {
-    const numSearchPrompts = Math.min(10, Math.max(1, parseInt(process.env.NUM_SEARCH_PROMPTS ?? '10', 10) || 10));
+    const numSearchPrompts = this.getNumSearchPrompts();
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('OPENAI_API_KEY is not set');
 
@@ -66,7 +70,9 @@ Business context:
 - Description: ${analysis.businessDescription}
 - Website structure: ${analysis.websiteStructure}
 
-Generate exactly ${numSearchPrompts} diverse, natural prompts that such a customer would use to find product recommendations in the same space (e.g. "Best project management software for small teams", "Top CRM for startups"). Each prompt should be one sentence, as if typed into a search or chat. Return them in the "prompts" array.`,
+Generate exactly ${numSearchPrompts} diverse, natural prompts that such a customer would use to find product recommendations in the same space (e.g. "Best project management software for small teams", "Top CRM for startups"). Each prompt should be one sentence, as if typed into a search or chat. Return them in the "prompts" array.
+
+Critical: Do NOT mention the name of the website, the business name, or any brand or company name that could identify this business. Write only generic, category-level prompts as if the user does not know the brand.`,
     });
 
     const out = experimental_output as { prompts: string[] };
@@ -139,6 +145,7 @@ Generate exactly ${numSearchPrompts} diverse, natural prompts that such a custom
 
     return {
       score,
+      numSearchPrompts: this.getNumSearchPrompts(),
       internalPrompts: allInternalPrompts,
       generatedPrompts,
       analysis,

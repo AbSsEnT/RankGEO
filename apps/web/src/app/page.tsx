@@ -19,6 +19,7 @@ interface SourcesByDomain {
 
 interface GeoScoreResult {
   score: number;
+  numSearchPrompts: number;
   internalPrompts: string[];
   generatedPrompts: string[];
   analysis?: AnalysisResult;
@@ -169,62 +170,68 @@ export default function Home() {
 
       {geoResult && (
         <section style={{ marginTop: 32 }}>
-          <h2>GEO score</h2>
-          <p style={{ fontSize: 24, fontWeight: 600, marginBottom: 24 }}>
-            Score: {geoResult.score}/100
-          </p>
-          <p style={{ marginBottom: 8 }}>
-            In {Math.round((geoResult.score / 100) * 10)} of 10 simulated user prompts, the analyzed website appeared in the search sources.
-          </p>
+          {(() => {
+            const numPrompts = geoResult.numSearchPrompts ?? geoResult.generatedPrompts.length;
+            return (
+              <>
+                <p style={{ fontSize: 24, fontWeight: 600, marginBottom: 24 }}>
+                  GEO Score: {geoResult.score}%
+                </p>
+                <p style={{ marginBottom: 8 }}>
+                  In {Math.round((geoResult.score / 100) * numPrompts)} of {numPrompts} simulated user prompts, the analyzed website appeared in the search sources.
+                </p>
 
-          <h3 style={{ marginTop: 24, marginBottom: 8 }}>Generated human-like prompts (10)</h3>
-          <p style={{ color: '#666', marginBottom: 12, fontSize: 14 }}>
-            Prompts a real customer would type into ChatGPT to get product recommendations in this space.
-          </p>
-          <ol style={{ margin: 0, paddingLeft: 20 }}>
-            {geoResult.generatedPrompts.map((p, i) => (
-              <li key={i} style={{ marginBottom: 8 }}>{p}</li>
-            ))}
-          </ol>
+                <h3 style={{ marginTop: 24, marginBottom: 8 }}>Generated human-like prompts ({numPrompts})</h3>
+                <p style={{ color: '#666', marginBottom: 12, fontSize: 14 }}>
+                  Prompts a real customer would type into ChatGPT to get product recommendations in this space.
+                </p>
+                <ol style={{ margin: 0, paddingLeft: 20 }}>
+                  {geoResult.generatedPrompts.map((p, i) => (
+                    <li key={i} style={{ marginBottom: 8 }}>{p}</li>
+                  ))}
+                </ol>
 
-          <h3 style={{ marginTop: 24, marginBottom: 8 }}>Internal search queries (web search tool)</h3>
-          <p style={{ color: '#666', marginBottom: 12, fontSize: 14 }}>
-            Queries the model used when calling the web search tool across all 10 prompts.
-          </p>
-          <ul style={{ margin: 0, paddingLeft: 20 }}>
-            {geoResult.internalPrompts.length === 0 ? (
-              <li>No web search calls recorded.</li>
-            ) : (
-              geoResult.internalPrompts.map((q, i) => (
-                <li key={i} style={{ marginBottom: 6 }}>{q}</li>
-              ))
-            )}
-          </ul>
+                <h3 style={{ marginTop: 24, marginBottom: 8 }}>Internal search queries (web search tool)</h3>
+                <p style={{ color: '#666', marginBottom: 12, fontSize: 14 }}>
+                  Queries the model used when calling the web search tool across all {numPrompts} prompts.
+                </p>
+                <ul style={{ margin: 0, paddingLeft: 20 }}>
+                  {geoResult.internalPrompts.length === 0 ? (
+                    <li>No web search calls recorded.</li>
+                  ) : (
+                    geoResult.internalPrompts.map((q, i) => (
+                      <li key={i} style={{ marginBottom: 6 }}>{q}</li>
+                    ))
+                  )}
+                </ul>
 
-          <h3 style={{ marginTop: 24, marginBottom: 8 }}>Sources by domain</h3>
-          <p style={{ color: '#666', marginBottom: 12, fontSize: 14 }}>
-            Domains returned by the web search tool; count is how many times each domain was referenced. Listed URLs are the specific paths found.
-          </p>
-          {!geoResult.sources?.length ? (
-            <p>No sources recorded.</p>
-          ) : (
-            <ul style={{ margin: 0, paddingLeft: 20, listStyle: 'none' }}>
-              {geoResult.sources.map((group, i) => (
-                <li key={i} style={{ marginBottom: 16 }}>
-                  <strong style={{ display: 'block', marginBottom: 6 }}>
-                    {group.domain} — Referenced {group.count} time{group.count === 1 ? '' : 's'}.
-                  </strong>
-                  <ul style={{ margin: 0, paddingLeft: 20 }}>
-                    {group.urls.map((url, j) => (
-                      <li key={j} style={{ marginBottom: 6 }}>
-                        <a href={url} target="_blank" rel="noopener noreferrer">{url}</a>
+                <h3 style={{ marginTop: 24, marginBottom: 8 }}>Sources by domain</h3>
+                <p style={{ color: '#666', marginBottom: 12, fontSize: 14 }}>
+                  Domains returned by the web search tool; count is how many times each domain was referenced. Listed URLs are the specific paths found.
+                </p>
+                {!geoResult.sources?.length ? (
+                  <p>No sources recorded.</p>
+                ) : (
+                  <ul style={{ margin: 0, paddingLeft: 20, listStyle: 'none' }}>
+                    {geoResult.sources.map((group, i) => (
+                      <li key={i} style={{ marginBottom: 16 }}>
+                        <strong style={{ display: 'block', marginBottom: 6 }}>
+                          {group.domain} — Referenced {group.count} time{group.count === 1 ? '' : 's'}.
+                        </strong>
+                        <ul style={{ margin: 0, paddingLeft: 20 }}>
+                          {group.urls.map((url, j) => (
+                            <li key={j} style={{ marginBottom: 6 }}>
+                              <a href={url} target="_blank" rel="noopener noreferrer">{url}</a>
+                            </li>
+                          ))}
+                        </ul>
                       </li>
                     ))}
                   </ul>
-                </li>
-              ))}
-            </ul>
-          )}
+                )}
+              </>
+            );
+          })()}
         </section>
       )}
     </main>
