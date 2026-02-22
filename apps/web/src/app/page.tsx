@@ -11,12 +11,18 @@ interface AnalysisResult {
   websiteStructure: string;
 }
 
+interface SourcesByDomain {
+  domain: string;
+  count: number;
+  urls: string[];
+}
+
 interface GeoScoreResult {
   score: number;
   internalPrompts: string[];
   generatedPrompts: string[];
   analysis?: AnalysisResult;
-  sources: { url: string; count: number }[];
+  sources: SourcesByDomain[];
 }
 
 export default function Home() {
@@ -195,18 +201,26 @@ export default function Home() {
             )}
           </ul>
 
-          <h3 style={{ marginTop: 24, marginBottom: 8 }}>Sources (ranked by reference count)</h3>
+          <h3 style={{ marginTop: 24, marginBottom: 8 }}>Sources by domain</h3>
           <p style={{ color: '#666', marginBottom: 12, fontSize: 14 }}>
-            Unique URLs returned by the web search tool, ordered by how often each was referenced.
+            Domains returned by the web search tool; count is how many times each domain was referenced. Listed URLs are the specific paths found.
           </p>
           {!geoResult.sources?.length ? (
             <p>No sources recorded.</p>
           ) : (
-            <ul style={{ margin: 0, paddingLeft: 20 }}>
-              {geoResult.sources.map((s, i) => (
-                <li key={i} style={{ marginBottom: 8 }}>
-                  <a href={s.url} target="_blank" rel="noopener noreferrer">{s.url}</a>
-                  {' — '}Referenced {s.count} time{s.count === 1 ? '' : 's'}.
+            <ul style={{ margin: 0, paddingLeft: 20, listStyle: 'none' }}>
+              {geoResult.sources.map((group, i) => (
+                <li key={i} style={{ marginBottom: 16 }}>
+                  <strong style={{ display: 'block', marginBottom: 6 }}>
+                    {group.domain} — Referenced {group.count} time{group.count === 1 ? '' : 's'}.
+                  </strong>
+                  <ul style={{ margin: 0, paddingLeft: 20 }}>
+                    {group.urls.map((url, j) => (
+                      <li key={j} style={{ marginBottom: 6 }}>
+                        <a href={url} target="_blank" rel="noopener noreferrer">{url}</a>
+                      </li>
+                    ))}
+                  </ul>
                 </li>
               ))}
             </ul>

@@ -118,8 +118,23 @@ Generate exactly ${numSearchPrompts} diverse, natural prompts that such a custom
     for (const u of allSources) {
       countByUrl.set(u, (countByUrl.get(u) ?? 0) + 1);
     }
-    const sources = [...countByUrl.entries()]
-      .map(([url, count]) => ({ url, count }))
+    const byDomain = new Map<string, { count: number; urls: Set<string> }>();
+    for (const [url, count] of countByUrl) {
+      const domain = this.domainKey(url);
+      const entry = byDomain.get(domain);
+      if (entry) {
+        entry.count += count;
+        entry.urls.add(url);
+      } else {
+        byDomain.set(domain, { count, urls: new Set([url]) });
+      }
+    }
+    const sources = [...byDomain.entries()]
+      .map(([domain, { count, urls }]) => ({
+        domain,
+        count,
+        urls: [...urls].sort(),
+      }))
       .sort((a, b) => b.count - a.count);
 
     return {
@@ -190,6 +205,16 @@ Generate exactly ${numSearchPrompts} diverse, natural prompts that such a custom
     }
 
     return { internalPrompts, sources };
+  }
+
+  /** Domain key for grouping: hostname lowercased, optional "www." stripped. */
+  private domainKey(url: string): string {
+    try {
+      const host = new URL(url).hostname.toLowerCase();
+      return host.startsWith('www.') ? host.slice(4) : host;
+    } catch {
+      return '';
+    }
   }
 
   private normalizeUrlForMatch(url: string): string {

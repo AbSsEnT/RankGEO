@@ -5,12 +5,19 @@ export interface GeoScoreRequestBody {
   analysis: WebsiteAnalysis;
 }
 
+/** Sources grouped by domain; count is how many times the domain was referenced (any URL on that domain). */
+export interface SourcesByDomain {
+  domain: string;
+  count: number;
+  urls: string[];
+}
+
 export interface GeoScoreResult {
   score: number;
   internalPrompts: string[];
   generatedPrompts: string[];
   analysis?: WebsiteAnalysis;
-  sources: { url: string; count: number }[];
+  sources: SourcesByDomain[];
 }
 
 export interface WebSearchCallResult {
