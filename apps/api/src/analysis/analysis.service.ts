@@ -4,7 +4,12 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { websiteAnalysisSchema, type WebsiteAnalysis } from './analysis.schema';
 import { CrawlService } from '../crawl/crawl.service';
 import { z } from 'zod';
-import type { GeoScoreResult, WebSearchCallResult } from './geo-score.types';
+import {
+  type GeoScoreResult,
+  type SourceCategory,
+  type WebSearchCallResult,
+  isSourceCategory,
+} from './geo-score.types';
 
 const promptsSchema = z.object({
   prompts: z.array(z.string()).min(1).max(10),
@@ -140,8 +145,15 @@ Critical: Do NOT mention the name of the website, the business name, or any bran
         domain,
         count,
         urls: [...urls].sort(),
+        category: 'other' as SourceCategory,
       }))
       .sort((a, b) => b.count - a.count);
+
+    const domains = sources.map((s) => s.domain);
+    const categoryMap = await this.classifyDomains(apiKey, domains);
+    sources.forEach(
+      (s) => (s.category = categoryMap[s.domain] ?? 'other'),
+    );
 
     return {
       score,
@@ -151,6 +163,51 @@ Critical: Do NOT mention the name of the website, the business name, or any bran
       analysis,
       sources,
     };
+  }
+
+  private async classifyDomains(
+    apiKey: string,
+    domains: string[],
+  ): Promise<Record<string, SourceCategory>> {
+    if (domains.length === 0) return {};
+    try {
+      const domainList = domains.join('\n');
+      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: 'gpt-5-mini',
+          messages: [
+            {
+              role: 'user',
+              content: `Classify each of these website domains into exactly one of: social_media, shopping, forums_qa, review_editorial, news_press, other. Use only the domain name. Domains are listed in display order (most referred first). Return a JSON object mapping each domain to its category, e.g. {"reddit.com": "forums_qa", "amazon.com": "shopping"}. No other text.\n\n${domainList}`,
+            },
+          ],
+          response_format: { type: 'json_object' },
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`OpenAI error: ${res.status} ${err}`);
+      }
+      const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+      const raw = data.choices?.[0]?.message?.content;
+      if (!raw || typeof raw !== 'string') return {};
+      const parsed = JSON.parse(raw) as Record<string, string>;
+      const out: Record<string, SourceCategory> = {};
+      for (const [key, val] of Object.entries(parsed)) {
+        let domain = key.toLowerCase().trim();
+        if (domain.startsWith('www.')) domain = domain.slice(4);
+        out[domain] = isSourceCategory(val) ? val : 'other';
+      }
+      return out;
+    } catch (e) {
+      console.warn('Domain classifier failed, using other for all:', e);
+      return {};
+    }
   }
 
   private async callResponsesApiWithWebSearch(

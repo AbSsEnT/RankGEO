@@ -11,10 +11,31 @@ interface AnalysisResult {
   websiteStructure: string;
 }
 
+type SourceCategory =
+  | 'social_media'
+  | 'shopping'
+  | 'forums_qa'
+  | 'review_editorial'
+  | 'news_press'
+  | 'other';
+
+function sourceCategoryLabel(cat: SourceCategory): string {
+  const labels: Record<SourceCategory, string> = {
+    social_media: 'Social media',
+    shopping: 'Shopping',
+    forums_qa: 'Forums & Q&A',
+    review_editorial: 'Review & editorial',
+    news_press: 'News & press',
+    other: 'Other',
+  };
+  return labels[cat];
+}
+
 interface SourcesByDomain {
   domain: string;
   count: number;
   urls: string[];
+  category: SourceCategory;
 }
 
 interface GeoScoreResult {
@@ -205,6 +226,33 @@ export default function Home() {
                   )}
                 </ul>
 
+                {geoResult.sources?.length > 0 && (() => {
+                  const totalRefs = geoResult.sources.reduce((s, x) => s + x.count, 0);
+                  const byCat = new Map<SourceCategory, number>();
+                  for (const s of geoResult.sources) {
+                    const cat = s.category ?? 'other';
+                    byCat.set(cat, (byCat.get(cat) ?? 0) + s.count);
+                  }
+                  const entries = [...byCat.entries()]
+                    .filter(([, c]) => c > 0)
+                    .sort((a, b) => b[1] - a[1]);
+                  return (
+                    <>
+                      <h3 style={{ marginTop: 24, marginBottom: 8 }}>Sources by category</h3>
+                      <p style={{ color: '#666', marginBottom: 12, fontSize: 14 }}>
+                        Share of references by category (weighted by how often each source was referenced).
+                      </p>
+                      <ul style={{ margin: 0, paddingLeft: 20 }}>
+                        {entries.map(([cat, count]) => (
+                          <li key={cat} style={{ marginBottom: 6 }}>
+                            {sourceCategoryLabel(cat)}: {Math.round((count / totalRefs) * 100)}%
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  );
+                })()}
+
                 <h3 style={{ marginTop: 24, marginBottom: 8 }}>Sources by domain</h3>
                 <p style={{ color: '#666', marginBottom: 12, fontSize: 14 }}>
                   Domains returned by the web search tool; count is how many times each domain was referenced. Listed URLs are the specific paths found.
@@ -216,7 +264,7 @@ export default function Home() {
                     {geoResult.sources.map((group, i) => (
                       <li key={i} style={{ marginBottom: 16 }}>
                         <strong style={{ display: 'block', marginBottom: 6 }}>
-                          {group.domain} — Referenced {group.count} time{group.count === 1 ? '' : 's'}.
+                          {group.domain} — Referenced {group.count} time{group.count === 1 ? '' : 's'} - {sourceCategoryLabel(group.category ?? 'other')}
                         </strong>
                         <ul style={{ margin: 0, paddingLeft: 20 }}>
                           {group.urls.map((url, j) => (

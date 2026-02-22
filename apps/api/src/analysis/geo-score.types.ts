@@ -5,11 +5,33 @@ export interface GeoScoreRequestBody {
   analysis: WebsiteAnalysis;
 }
 
+export type SourceCategory =
+  | 'social_media'
+  | 'shopping'
+  | 'forums_qa'
+  | 'review_editorial'
+  | 'news_press'
+  | 'other';
+
+const SOURCE_CATEGORIES: SourceCategory[] = [
+  'social_media',
+  'shopping',
+  'forums_qa',
+  'review_editorial',
+  'news_press',
+  'other',
+];
+
+export function isSourceCategory(s: string): s is SourceCategory {
+  return SOURCE_CATEGORIES.includes(s as SourceCategory);
+}
+
 /** Sources grouped by domain; count is how many times the domain was referenced (any URL on that domain). */
 export interface SourcesByDomain {
   domain: string;
   count: number;
   urls: string[];
+  category: SourceCategory;
 }
 
 export interface GeoScoreResult {
