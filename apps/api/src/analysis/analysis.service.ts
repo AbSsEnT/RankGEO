@@ -83,12 +83,16 @@ Generate exactly 10 diverse, natural prompts that such a customer would use to f
       throw new Error('Failed to generate search prompts');
     }
 
+    const results = await Promise.all(
+      generatedPrompts.map((userPrompt) =>
+        this.callResponsesApiWithWebSearch(apiKey, userPrompt),
+      ),
+    );
+
     const allInternalPrompts: string[] = [];
     const allSources: string[] = [];
     const sourcesPerPrompt: string[][] = [];
-
-    for (const userPrompt of generatedPrompts) {
-      const result = await this.callResponsesApiWithWebSearch(apiKey, userPrompt);
+    for (const result of results) {
       allInternalPrompts.push(...result.internalPrompts);
       allSources.push(...result.sources);
       sourcesPerPrompt.push(result.sources);
@@ -128,7 +132,7 @@ Generate exactly 10 diverse, natural prompts that such a customer would use to f
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini-search-preview',
+        model: 'gpt-5-mini',
         input: userPrompt,
         tools: [{ type: 'web_search' }],
         include: ['web_search_call.action.sources'],
