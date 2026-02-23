@@ -1,6 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
+import { useRank } from '../context/RankContext';
+import styles from './page.module.css';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -19,23 +22,17 @@ type SourceCategory =
   | 'news_press'
   | 'other';
 
-function sourceCategoryLabel(cat: SourceCategory): string {
-  const labels: Record<SourceCategory, string> = {
-    social_media: 'Social media',
-    shopping: 'Shopping',
-    forums_qa: 'Forums & Q&A',
-    review_editorial: 'Review & editorial',
-    news_press: 'News & press',
-    other: 'Other',
-  };
-  return labels[cat];
-}
-
 interface SourcesByDomain {
   domain: string;
   count: number;
   urls: string[];
   category: SourceCategory;
+}
+
+interface PromptResult {
+  prompt: string;
+  apparitionLikelihood: number;
+  sources: SourcesByDomain[];
 }
 
 interface GeoScoreResult {
@@ -45,30 +42,52 @@ interface GeoScoreResult {
   generatedPrompts: string[];
   analysis?: AnalysisResult;
   sources: SourcesByDomain[];
+  promptResults: PromptResult[];
 }
 
 export default function Home() {
+  const [step, setStep] = useState<1 | 2 | 3>(1);
   const [url, setUrl] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+
+  // Step 1 state
+  const [loading1, setLoading1] = useState(false);
+  const [error1, setError1] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
 
-  const [geoLoading, setGeoLoading] = useState(false);
-  const [geoError, setGeoError] = useState<string | null>(null);
+  // Step 2 state
+  const [loading2, setLoading2] = useState(false);
+  const [error2, setError2] = useState<string | null>(null);
   const [geoResult, setGeoResult] = useState<GeoScoreResult | null>(null);
 
-  async function handleSubmit(e: React.FormEvent) {
+  // Step 3 state
+  const [selectedQueries, setSelectedQueries] = useState<Set<number>>(new Set());
+
+  const { setUrl: setGlobalUrl, setAnalysis, setGeoScore, setTrackedQueries } = useRank();
+  const router = useRouter();
+
+  const fetchTriggeredRef = useRef(false);
+
+  function handleContinueToDashboard() {
+    setGlobalUrl(url);
+    if (result) setAnalysis(result);
+    if (geoResult) setGeoScore(geoResult);
+    setTrackedQueries(selectedQueries);
+    router.push('/dashboard');
+  }
+
+  async function handleAnalyze(e: React.FormEvent) {
     e.preventDefault();
-    setError(null);
+    fetchTriggeredRef.current = false;
+    setError1(null);
     setResult(null);
     setGeoResult(null);
-    setGeoError(null);
+    setError2(null);
     const targetUrl = url.trim();
     if (!targetUrl) {
-      setError('Please enter a website URL.');
+      setError1('Please enter a website URL.');
       return;
     }
-    setLoading(true);
+    setLoading1(true);
     try {
       const res = await fetch(`${API_BASE}/analyze`, {
         method: 'POST',
@@ -78,210 +97,270 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) {
         const msg = Array.isArray(data.message) ? data.message[0] : data.message;
-        setError(msg ?? data.error ?? 'Analysis failed');
+        setError1(msg ?? data.error ?? 'Analysis failed');
+        setLoading1(false);
         return;
       }
       if (data.error) {
-        setError(data.error);
+        setError1(data.error);
+        setLoading1(false);
         return;
       }
       setResult(data as AnalysisResult);
+      setStep(2);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Request failed');
+      setError1(err instanceof Error ? err.message : 'Request failed');
     } finally {
-      setLoading(false);
+      setLoading1(false);
     }
   }
 
-  async function handleGeoScore() {
-    const targetUrl = url.trim();
-    if (!targetUrl || !result) return;
-    setGeoError(null);
-    setGeoLoading(true);
-    try {
-      const res = await fetch(`${API_BASE}/analyze/geo-score`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: targetUrl, analysis: result }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        const msg = Array.isArray(data.message) ? data.message[0] : data.message;
-        setGeoError(msg ?? data.error ?? 'GEO score failed');
-        return;
-      }
-      if (data.error) {
-        setGeoError(data.error);
-        return;
-      }
-      setGeoResult(data as GeoScoreResult);
-    } catch (err) {
-      setGeoError(err instanceof Error ? err.message : 'Request failed');
-    } finally {
-      setGeoLoading(false);
+  useEffect(() => {
+    if (step === 2 && result && !geoResult && !fetchTriggeredRef.current) {
+      fetchTriggeredRef.current = true;
+      // Auto-trigger geo score
+      let isMounted = true;
+      const targetUrl = url.trim();
+
+      const fetchGeo = async () => {
+        console.log('[Frontend] Initiating /analyze/geo-score fetch...');
+        setLoading2(true);
+        try {
+          const res = await fetch(`${API_BASE}/analyze/geo-score`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: targetUrl, analysis: result }),
+          });
+          console.log(`[Frontend] Fetch status: ${res.status}`);
+
+          const text = await res.text();
+          console.log(`[Frontend] Fetch response text:`, text.substring(0, 200) + '...');
+
+          let data;
+          try {
+            data = JSON.parse(text);
+          } catch (e: any) {
+            console.error('[Frontend] Failed to parse JSON:', e.message);
+            throw new Error(`Invalid JSON response: ${text.substring(0, 100)}`);
+          }
+
+          if (!isMounted) {
+            console.log('[Frontend] Component unmounted, skipping update.');
+            return;
+          }
+
+          if (!res.ok) {
+            console.log('[Frontend] Response not ok, setting error.');
+            const msg = Array.isArray(data.message) ? data.message[0] : data.message;
+            setError2(msg ?? data.error ?? 'GEO score failed');
+            return;
+          }
+          if (data.error) {
+            console.log('[Frontend] Received data.error.');
+            setError2(data.error);
+            return;
+          }
+
+          console.log('[Frontend] Setting geoResult and advancing to Step 3!');
+          setGeoResult(data as GeoScoreResult);
+          setStep(3); // Move to step 3 on success
+        } catch (err) {
+          console.error('[Frontend] Fetch caught error:', err);
+          if (!isMounted) return;
+          setError2(err instanceof Error ? err.message : 'Request failed');
+        } finally {
+          console.log('[Frontend] Fetch attempt finished. Cleaning up loading state.');
+          if (isMounted) setLoading2(false);
+        }
+      };
+
+      fetchGeo();
+
+      return () => {
+        isMounted = false;
+      };
     }
-  }
+  }, [step, result, geoResult, url]);
+
+  const toggleQuery = (index: number) => {
+    setSelectedQueries((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(index)) {
+        newSet.delete(index);
+      } else {
+        if (newSet.size < 5) {
+          newSet.add(index);
+        }
+      }
+      return newSet;
+    });
+  };
 
   return (
-    <main style={{ maxWidth: 720, margin: '0 auto', padding: 24 }}>
-      <h1>RankGEO</h1>
-      <p style={{ marginBottom: 24 }}>
-        Improve GEO for your clients’ websites. Enter a URL to analyze sector, business type, description, and structure.
-      </p>
+    <main className={styles.container}>
+      <div className={styles.bgAnimation} />
 
-      <form onSubmit={handleSubmit}>
-        <input
-          type="url"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://example.com"
-          disabled={loading}
-          style={{
-            width: '100%',
-            padding: 12,
-            marginBottom: 12,
-            fontSize: 16,
-          }}
-        />
-        <button type="submit" disabled={loading}>
-          {loading ? 'Analyzing…' : 'Analyze website'}
-        </button>
-      </form>
-
-      {error && (
-        <p style={{ color: 'crimson', marginTop: 16 }} role="alert">
-          {error}
+      <div className={`${styles.content} ${step > 1 ? styles.contentExpanded : ''}`}>
+        <h1 className={styles.logo}>RankLM</h1>
+        <p className={styles.subtitle}>
+          Analyze and optimize your presence across AI platforms and modern conversational search.
         </p>
-      )}
 
-      {result && (
-        <section style={{ marginTop: 32 }}>
-          <h2>Analysis result</h2>
-          <dl style={{ margin: 0 }}>
-            <dt><strong>Sector of activity</strong></dt>
-            <dd style={{ marginBottom: 16 }}>{result.sectorOfActivity}</dd>
-
-            <dt><strong>Business type</strong></dt>
-            <dd style={{ marginBottom: 16 }}>{result.businessType}</dd>
-
-            <dt><strong>Business description</strong></dt>
-            <dd style={{ marginBottom: 16 }}>{result.businessDescription}</dd>
-
-            <dt><strong>Website structure</strong></dt>
-            <dd>{result.websiteStructure}</dd>
-          </dl>
-
-          <div style={{ marginTop: 24 }}>
-            <button
-              type="button"
-              onClick={handleGeoScore}
-              disabled={geoLoading}
-            >
-              {geoLoading ? 'Computing GEO score…' : 'Get GEO score'}
+        {step === 1 && (
+          <form className={styles.inputWrapper} onSubmit={handleAnalyze}>
+            <input
+              type="url"
+              className={styles.input}
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://example.com"
+              disabled={loading1}
+              required
+            />
+            <button type="submit" className={styles.button} disabled={loading1}>
+              {loading1 ? 'Analyzing website...' : 'Start Global Analysis'}
             </button>
+            {error1 && <div className={styles.error}>{error1}</div>}
+          </form>
+        )}
+
+        {step === 2 && result && (
+          <div className={styles.card}>
+            <h2 className={styles.cardTitle}>Initial Website Analysis</h2>
+
+            <div className={styles.dl}>
+              <div>
+                <div className={styles.dt}>Sector of Activity</div>
+                <div className={styles.dd}>{result.sectorOfActivity}</div>
+              </div>
+
+              <div>
+                <div className={styles.dt}>Business Type</div>
+                <div className={styles.dd}>{result.businessType}</div>
+              </div>
+
+              <div>
+                <div className={styles.dt}>Business Description</div>
+                <div className={styles.dd}>{result.businessDescription}</div>
+              </div>
+
+              <div>
+                <div className={styles.dt}>Website Structure</div>
+                <div className={styles.dd}>{result.websiteStructure}</div>
+              </div>
+            </div>
+
+            {loading2 && !error2 && (
+              <div className={styles.progressContainer}>
+                <div className={styles.progressBar} style={{ width: '85%' }} />
+              </div>
+            )}
+            {loading2 && !error2 && (
+              <div className={styles.loadingText}>Computing AI Geo Score...</div>
+            )}
+
+            {error2 && (
+              <div className={styles.error} style={{ marginTop: '24px' }}>
+                Failed to compute GEO score: {error2}
+                <button
+                  onClick={() => { setError2(null); setLoading2(false); }}
+                  className={styles.button}
+                  style={{ marginTop: '12px' }}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
           </div>
-        </section>
-      )}
+        )}
 
-      {geoError && (
-        <p style={{ color: 'crimson', marginTop: 16 }} role="alert">
-          {geoError}
-        </p>
-      )}
+        {step === 3 && geoResult && (
+          <div className={styles.card}>
+            <h2 className={styles.cardTitle}>AI Search Intelligence</h2>
 
-      {geoResult && (
-        <section style={{ marginTop: 32 }}>
-          {(() => {
-            const numPrompts = geoResult.numSearchPrompts ?? geoResult.generatedPrompts.length;
-            return (
-              <>
-                <p style={{ fontSize: 24, fontWeight: 600, marginBottom: 24 }}>
-                  GEO Score: {geoResult.score}%
-                </p>
-                <p style={{ marginBottom: 8 }}>
-                  In {Math.round((geoResult.score / 100) * numPrompts)} of {numPrompts} simulated user prompts, the analyzed website appeared in the search sources.
-                </p>
+            <p style={{ marginBottom: '16px', color: 'var(--text-muted)' }}>
+              Select up to 5 AI search queries you want to track to see your ranking progression.
+            </p>
 
-                <h3 style={{ marginTop: 24, marginBottom: 8 }}>Generated human-like prompts ({numPrompts})</h3>
-                <p style={{ color: '#666', marginBottom: 12, fontSize: 14 }}>
-                  Prompts a real customer would type into ChatGPT to get product recommendations in this space.
-                </p>
-                <ol style={{ margin: 0, paddingLeft: 20 }}>
-                  {geoResult.generatedPrompts.map((p, i) => (
-                    <li key={i} style={{ marginBottom: 8 }}>{p}</li>
-                  ))}
-                </ol>
+            <ul className={styles.queryList}>
+              {geoResult.internalPrompts.length === 0 ? (
+                <li style={{ color: 'var(--text-muted)' }}>No internal queries found.</li>
+              ) : (
+                geoResult.internalPrompts.map((q, i) => {
+                  const isSelected = selectedQueries.has(i);
+                  const maxReached = selectedQueries.size >= 5 && !isSelected;
 
-                <h3 style={{ marginTop: 24, marginBottom: 8 }}>Internal search queries (web search tool)</h3>
-                <p style={{ color: '#666', marginBottom: 12, fontSize: 14 }}>
-                  Queries the model used when calling the web search tool across all {numPrompts} prompts.
-                </p>
-                <ul style={{ margin: 0, paddingLeft: 20 }}>
-                  {geoResult.internalPrompts.length === 0 ? (
-                    <li>No web search calls recorded.</li>
-                  ) : (
-                    geoResult.internalPrompts.map((q, i) => (
-                      <li key={i} style={{ marginBottom: 6 }}>{q}</li>
-                    ))
-                  )}
-                </ul>
-
-                {geoResult.sources?.length > 0 && (() => {
-                  const totalRefs = geoResult.sources.reduce((s, x) => s + x.count, 0);
-                  const byCat = new Map<SourceCategory, number>();
-                  for (const s of geoResult.sources) {
-                    const cat = s.category ?? 'other';
-                    byCat.set(cat, (byCat.get(cat) ?? 0) + s.count);
-                  }
-                  const entries = [...byCat.entries()]
-                    .filter(([, c]) => c > 0)
-                    .sort((a, b) => b[1] - a[1]);
                   return (
-                    <>
-                      <h3 style={{ marginTop: 24, marginBottom: 8 }}>Sources by category</h3>
-                      <p style={{ color: '#666', marginBottom: 12, fontSize: 14 }}>
-                        Share of references by category (weighted by how often each source was referenced).
-                      </p>
-                      <ul style={{ margin: 0, paddingLeft: 20 }}>
-                        {entries.map(([cat, count]) => (
-                          <li key={cat} style={{ marginBottom: 6 }}>
-                            {sourceCategoryLabel(cat)}: {Math.round((count / totalRefs) * 100)}%
-                          </li>
-                        ))}
-                      </ul>
-                    </>
+                    <li
+                      key={i}
+                      className={`${styles.queryItem} ${isSelected ? styles.queryItemSelected : ''} ${maxReached ? styles.queryItemDisabled : ''}`}
+                      onClick={() => !maxReached && toggleQuery(i)}
+                    >
+                      <div className={styles.checkbox} />
+                      <span className={styles.queryText}>{q}</span>
+                    </li>
                   );
-                })()}
+                })
+              )}
+            </ul>
 
-                <h3 style={{ marginTop: 24, marginBottom: 8 }}>Sources by domain</h3>
-                <p style={{ color: '#666', marginBottom: 12, fontSize: 14 }}>
-                  Domains returned by the web search tool; count is how many times each domain was referenced. Listed URLs are the specific paths found.
-                </p>
-                {!geoResult.sources?.length ? (
-                  <p>No sources recorded.</p>
-                ) : (
-                  <ul style={{ margin: 0, paddingLeft: 20, listStyle: 'none' }}>
-                    {geoResult.sources.map((group, i) => (
-                      <li key={i} style={{ marginBottom: 16 }}>
-                        <strong style={{ display: 'block', marginBottom: 6 }}>
-                          {group.domain} — Referenced {group.count} time{group.count === 1 ? '' : 's'} - {sourceCategoryLabel(group.category ?? 'other')}
-                        </strong>
-                        <ul style={{ margin: 0, paddingLeft: 20 }}>
-                          {group.urls.map((url, j) => (
-                            <li key={j} style={{ marginBottom: 6 }}>
-                              <a href={url} target="_blank" rel="noopener noreferrer">{url}</a>
+            {selectedQueries.size > 0 && (
+              <div className={styles.queryDetails}>
+                <h3 className={styles.cardTitle} style={{ borderBottom: 'none', marginBottom: '16px' }}>Tracked Queries</h3>
+
+                {Array.from(selectedQueries).map(index => {
+                  const q = geoResult.internalPrompts[index];
+                  const promptResult = geoResult.promptResults ? geoResult.promptResults[index] : null;
+
+                  // Top 3 sources specifically for this prompt
+                  const topSources = promptResult
+                    ? [...(promptResult.sources || [])]
+                      .sort((a, b) => b.count - a.count)
+                      .slice(0, 3)
+                    : [];
+
+                  const likelihood = promptResult ? promptResult.apparitionLikelihood : 0;
+
+                  return (
+                    <div key={index} className={styles.queryDetailCard}>
+                      <div className={styles.queryDetailTitle}>{q}</div>
+
+                      <div className={styles.statRow}>
+                        <span className={styles.statLabel}>Target Apparition Likelihood</span>
+                        <span className={styles.statValue}>{likelihood}%</span>
+                      </div>
+
+                      <div>
+                        <div className={styles.statLabel} style={{ marginBottom: '8px' }}>Most Cited Sources</div>
+                        <ul className={styles.sourceList}>
+                          {topSources.length > 0 ? topSources.map((src, idx) => (
+                            <li key={idx} className={styles.sourceItem}>
+                              <span className={styles.sourceDomain}>{src.domain}</span>
+                              <span className={styles.sourceCount}>{src.count} citations</span>
                             </li>
-                          ))}
+                          )) : (
+                            <li className={styles.sourceItem}>
+                              <span className={styles.sourceDomain}>No sources cited.</span>
+                            </li>
+                          )}
                         </ul>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </>
-            );
-          })()}
-        </section>
-      )}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                <button
+                  className={styles.button}
+                  style={{ marginTop: '32px' }}
+                  onClick={handleContinueToDashboard}
+                >
+                  Continue to Dashboard
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </main>
   );
 }

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import * as cheerio from 'cheerio';
 
-const MAX_PAGES = 25;
+const MAX_PAGES = 10;
 const MAX_CONTENT_CHARS = 120_000;
 
 /** Browser-like headers to reduce blocking by anti-bot / anti-crawler systems */
@@ -21,6 +21,7 @@ export interface PageContent {
 @Injectable()
 export class CrawlService {
   async crawlSite(siteUrl: string): Promise<PageContent[]> {
+    console.log(`[Crawl] Initializing crawler for: ${siteUrl}`);
     const base = this.normalizeBase(siteUrl);
     const seen = new Set<string>([base]);
     const queue: string[] = [base];
@@ -28,6 +29,7 @@ export class CrawlService {
 
     while (queue.length > 0 && results.length < MAX_PAGES) {
       const url = queue.shift()!;
+      console.log(`[Crawl] Fetching page: ${url} (${results.length}/${MAX_PAGES} collected)`);
       try {
         const res = await fetch(url, {
           headers: CRAWL_HEADERS,
@@ -58,11 +60,12 @@ export class CrawlService {
             queue.push(absolute);
           }
         });
-      } catch {
-        // Skip failed pages
+      } catch (e) {
+        console.warn(`[Crawl] Failed to fetch or parse ${url}: ${(e as Error).message}`);
       }
     }
 
+    console.log(`[Crawl] Finished crawling ${siteUrl}. Extracted ${results.length} pages.`);
     return results;
   }
 

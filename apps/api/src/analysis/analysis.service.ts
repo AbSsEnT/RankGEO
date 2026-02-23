@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { generateText, Output } from 'ai';
+import { generateText, generateObject, Output } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { websiteAnalysisSchema, type WebsiteAnalysis } from './analysis.schema';
 import { CrawlService } from '../crawl/crawl.service';
@@ -8,8 +8,23 @@ import {
   type GeoScoreResult,
   type SourceCategory,
   type WebSearchCallResult,
+  type PromptResult,
+  type SourcesByDomain,
+  type ContentStrategy,
   isSourceCategory,
 } from './geo-score.types';
+
+// Recursively strips Proxies, internal Getters, and Class instances
+// down to pure, serializable plain Old JavaScript Objects (POJOs)
+function stripProxies(obj: any): any {
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(stripProxies);
+  const out: Record<string, any> = {};
+  for (const key of Object.keys(obj)) {
+    out[key] = stripProxies(obj[key]);
+  }
+  return out;
+}
 
 const promptsSchema = z.object({
   prompts: z.array(z.string()).min(1).max(10),
@@ -17,13 +32,15 @@ const promptsSchema = z.object({
 
 @Injectable()
 export class AnalysisService {
-  constructor(private readonly crawlService: CrawlService) {}
+  constructor(private readonly crawlService: CrawlService) { }
 
   getNumSearchPrompts(): number {
     return Math.min(10, Math.max(1, parseInt(process.env.NUM_SEARCH_PROMPTS ?? '10', 10) || 10));
+    // return 5;
   }
 
   async analyzeWebsite(url: string): Promise<WebsiteAnalysis> {
+    console.log(`[Analysis] Starting website analysis for: ${url}`);
     const pages = await this.crawlService.crawlSite(url);
     if (pages.length === 0) {
       throw new Error('Could not extract any content from the website');
@@ -37,7 +54,7 @@ export class AnalysisService {
 
     const openai = createOpenAI({ apiKey });
     const { experimental_output } = await generateText({
-      model: openai('gpt-4o-mini'),
+      model: openai('gpt-5-mini'),
       experimental_output: Output.object({
         schema: websiteAnalysisSchema,
       }),
@@ -53,17 +70,19 @@ Provide:
 4. websiteStructure: A description of the website structure and main sections (e.g. homepage, product pages, blog, contact).`,
     });
 
+    console.log(`[Analysis] Analysis complete. Sector: ${experimental_output?.sectorOfActivity}`);
     return experimental_output as WebsiteAnalysis;
   }
 
   async generateSearchPrompts(analysis: WebsiteAnalysis): Promise<string[]> {
+    console.log('[Analysis] Generating search prompts...');
     const numSearchPrompts = this.getNumSearchPrompts();
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('OPENAI_API_KEY is not set');
 
     const openai = createOpenAI({ apiKey });
     const { experimental_output } = await generateText({
-      model: openai('gpt-4o-mini'),
+      model: openai('gpt-5-mini'),
       experimental_output: Output.object({
         schema: promptsSchema,
       }),
@@ -88,45 +107,105 @@ Critical: Do NOT mention the name of the website, the business name, or any bran
     url: string,
     analysis: WebsiteAnalysis,
   ): Promise<GeoScoreResult> {
+    console.log(`[Analysis] Starting GEO Score Pipeline for: ${url}`);
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('OPENAI_API_KEY is not set');
 
     const generatedPrompts = await this.generateSearchPrompts(analysis);
+    console.log(`[Analysis] Generated ${generatedPrompts.length} search prompts.`);
     if (generatedPrompts.length === 0) {
       throw new Error('Failed to generate search prompts');
     }
 
+    console.log('[Analysis] Firing concurrent Web Search calls...');
+    const startTime = Date.now();
     const results = await Promise.all(
       generatedPrompts.map((userPrompt) =>
         this.callResponsesApiWithWebSearch(apiKey, userPrompt),
       ),
     );
+    console.log(`[Analysis] All ${generatedPrompts.length} Web Search calls finished in ${Date.now() - startTime}ms`);
 
     const allInternalPrompts: string[] = [];
     const allSources: string[] = [];
-    const sourcesPerPrompt: string[][] = [];
     for (const result of results) {
       allInternalPrompts.push(...result.internalPrompts);
       allSources.push(...result.sources);
-      sourcesPerPrompt.push(result.sources);
     }
 
     const normalizedSite = this.normalizeUrlForMatch(url);
+
+    // Group global sources
+    const sources = this.groupSources(allSources);
+
+    // Group per-prompt sources and likelihood
+    const promptResults: PromptResult[] = [];
     let promptsWhereSiteAppeared = 0;
-    for (const sources of sourcesPerPrompt) {
-      if (sources.some((s) => this.urlMatches(s, normalizedSite))) {
-        promptsWhereSiteAppeared += 1;
+
+    for (const result of results) {
+      const groupedSources = this.groupSources(result.sources);
+      let likelihood = 0;
+      if (result.sources.some(s => this.urlMatches(s, normalizedSite))) {
+        likelihood = 100;
+      }
+
+      for (const promptText of result.internalPrompts) {
+        if (likelihood === 100) promptsWhereSiteAppeared += 1;
+        promptResults.push({
+          prompt: promptText,
+          apparitionLikelihood: likelihood,
+          sources: JSON.parse(JSON.stringify(groupedSources)), // Clone to avoid reference issues
+        });
       }
     }
+
     const score =
-      sourcesPerPrompt.length === 0
+      promptResults.length === 0
         ? 0
         : Math.round(
-            (100 * promptsWhereSiteAppeared) / sourcesPerPrompt.length,
-          );
+          (100 * promptsWhereSiteAppeared) / promptResults.length,
+        );
 
+    console.log(`[Analysis] Calculating scores and extracting domains...`);
+    const uniqueDomains = new Set<string>();
+    sources.forEach(s => uniqueDomains.add(s.domain));
+    promptResults.forEach(pr => pr.sources.forEach(s => uniqueDomains.add(s.domain)));
+
+    const domains = Array.from(uniqueDomains);
+    console.log(`[Analysis] Classifying ${domains.length} domains...`);
+    const categoryMap = await this.classifyDomains(apiKey, domains);
+    console.log(`[Analysis] Domain classification complete.`);
+
+    // Assign categories
+    sources.forEach(s => (s.category = categoryMap[s.domain] ?? 'other'));
+    promptResults.forEach(pr => {
+      pr.sources.forEach(s => (s.category = categoryMap[s.domain] ?? 'other'));
+    });
+
+    const payload: GeoScoreResult = {
+      score,
+      numSearchPrompts: this.getNumSearchPrompts(),
+      internalPrompts: allInternalPrompts,
+      generatedPrompts,
+      analysis: stripProxies(analysis),
+      sources,
+      promptResults,
+    };
+
+    console.log(`[Analysis] Attempting manual JSON serialization test...`);
+    try {
+      const test = JSON.stringify(payload);
+      console.log(`[Analysis] Serialization success! Payload length: ${test.length}`);
+    } catch (err: any) {
+      console.error(`[Analysis] Serialization failed internally:`, err.message);
+    }
+
+    return stripProxies(payload) as GeoScoreResult;
+  }
+
+  private groupSources(sourceUrls: string[]): SourcesByDomain[] {
     const countByUrl = new Map<string, number>();
-    for (const u of allSources) {
+    for (const u of sourceUrls) {
       countByUrl.set(u, (countByUrl.get(u) ?? 0) + 1);
     }
     const byDomain = new Map<string, { count: number; urls: Set<string> }>();
@@ -140,7 +219,7 @@ Critical: Do NOT mention the name of the website, the business name, or any bran
         byDomain.set(domain, { count, urls: new Set([url]) });
       }
     }
-    const sources = [...byDomain.entries()]
+    return [...byDomain.entries()]
       .map(([domain, { count, urls }]) => ({
         domain,
         count,
@@ -148,21 +227,6 @@ Critical: Do NOT mention the name of the website, the business name, or any bran
         category: 'other' as SourceCategory,
       }))
       .sort((a, b) => b.count - a.count);
-
-    const domains = sources.map((s) => s.domain);
-    const categoryMap = await this.classifyDomains(apiKey, domains);
-    sources.forEach(
-      (s) => (s.category = categoryMap[s.domain] ?? 'other'),
-    );
-
-    return {
-      score,
-      numSearchPrompts: this.getNumSearchPrompts(),
-      internalPrompts: allInternalPrompts,
-      generatedPrompts,
-      analysis,
-      sources,
-    };
   }
 
   private async classifyDomains(
@@ -214,6 +278,8 @@ Critical: Do NOT mention the name of the website, the business name, or any bran
     apiKey: string,
     userPrompt: string,
   ): Promise<WebSearchCallResult> {
+    console.log(`[WebSearch] Starting search for prompt: "${userPrompt}"`);
+    const start = Date.now();
     const res = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
@@ -222,28 +288,18 @@ Critical: Do NOT mention the name of the website, the business name, or any bran
       },
       body: JSON.stringify({
         model: 'gpt-5-mini',
-        input: userPrompt,
+        input: `[Respond with ONLY 'Done' and nothing else.] ${userPrompt}`,
         tools: [{ type: 'web_search' }],
         include: ['web_search_call.action.sources'],
         tool_choice: 'required',
       }),
     });
+    const data = await res.json() as any;
+    console.log(`[WebSearch] Response: ${JSON.stringify(data).substring(0, 300)}...`);
 
     if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`OpenAI Responses API error: ${res.status} ${err}`);
+      throw new Error(`OpenAI Responses API error: ${res.status} ${JSON.stringify(data)}`);
     }
-
-    const data = (await res.json()) as {
-      output?: Array<{
-        type?: string;
-        action?: {
-          type?: string;
-          queries?: string[];
-          sources?: Array<{ type?: string; url?: string }>;
-        };
-      }>;
-    };
 
     const internalPrompts: string[] = [];
     const sources: string[] = [];
@@ -257,7 +313,11 @@ Critical: Do NOT mention the name of the website, the business name, or any bran
         };
         if (action.type === 'search') {
           if (Array.isArray(action.queries)) {
-            internalPrompts.push(...action.queries);
+            const cleanedQueries = action.queries.map(q =>
+              q.replace("[Respond with ONLY 'Done' and nothing else.] ", "")
+                .replace("[Respond with ONLY 'Done' and nothing else.]", "")
+            );
+            internalPrompts.push(...cleanedQueries);
           }
           if (Array.isArray(action.sources)) {
             for (const s of action.sources) {
@@ -268,17 +328,105 @@ Critical: Do NOT mention the name of the website, the business name, or any bran
       }
     }
 
+    console.log(`[WebSearch] Search finished in ${Date.now() - start}ms: found ${sources.length} sources and ${internalPrompts.length} internal queries.`);
     return { internalPrompts, sources };
   }
 
   /** Domain key for grouping: hostname lowercased, optional "www." stripped. */
-  private domainKey(url: string): string {
+  private domainKey(urlStr: string): string {
     try {
-      const host = new URL(url).hostname.toLowerCase();
-      return host.startsWith('www.') ? host.slice(4) : host;
+      if (!urlStr.startsWith('http')) {
+        urlStr = 'http://' + urlStr;
+      }
+      const u = new URL(urlStr);
+      let hostname = u.hostname;
+      if (hostname.startsWith('www.')) hostname = hostname.slice(4);
+      return hostname;
     } catch {
-      return '';
+      return urlStr;
     }
+  }
+
+  async generateContentStrategy(
+    targetUrl: string,
+    analysis: WebsiteAnalysis,
+    promptResults: PromptResult[],
+  ): Promise<ContentStrategy> {
+    console.log(`[Strategy] Generating strategy for ${targetUrl} based on ${promptResults.length} tracked queries.`);
+
+    // 1. Extract the top absolute URLs across all tracked prompt results
+    const allUrls = new Set<string>();
+    for (const pr of promptResults) {
+      for (const src of pr.sources) {
+        for (const u of src.urls) {
+          allUrls.add(u);
+        }
+      }
+    }
+
+    // Grab max 5 distinct high-ranking competitor URLs to scrape context from.
+    const topCompetitorUrls = Array.from(allUrls).slice(0, 5);
+
+    console.log(`[Strategy] Scraping ${topCompetitorUrls.length} top competitor sources...`);
+
+    // 2. Scrape competitor content concurrently
+    const scrapedResults = await Promise.all(
+      topCompetitorUrls.map(u => this.crawlService.crawlSite(u).catch(() => []))
+    );
+
+    // Flatten and combine the text into a single context payload
+    const competitorContext = scrapedResults
+      .flat()
+      .map(page => `\n--- URL: ${page.url} ---\n${page.text.substring(0, 10000)}`)
+      .join('\n\n');
+
+    console.log(`[Strategy] Calling LLM to matrix strategy...`);
+
+    // 3. Request structured Output strategy from LLM
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      throw new Error('OPENAI_API_KEY is not set');
+    }
+    const openai = createOpenAI({ apiKey });
+
+    const { object } = await generateObject({
+      model: openai('gpt-5-mini'),
+      schema: z.object({
+        title: z.string().describe('A catchy, actionable title for this content piece.'),
+        targetPlatform: z.string().describe('The ideal platform/channel (e.g., SEO Blog, Reddit thread, LinkedIn Post, Knowledge Base).'),
+        targetFormat: z.string().describe('The format type (e.g., How-to Guide, Listicle, FAQ, Case Study).'),
+        description: z.string().describe('A brief summary of what the content should be about and its primary goal.'),
+        structure: z.array(z.object({
+          heading: z.string().describe('The section heading (H2/H3 level).'),
+          description: z.string().describe('Brief instructions on what to cover in this section.')
+        })).describe('A recommended outline structure for the content.'),
+        keywords: z.array(z.string()).describe('High-impact keywords extracted from competitor analysis to target.'),
+      }),
+      system: `You are an elite SEO and Content Strategy architect. 
+Your goal is to design a highly specific content asset that helps the target website rank for their chosen search queries.
+Analyze the target website's profile and the actual scraped content from currently ranking competitors. 
+Formulate a robust, modern content strategy structured into specific headings, specifying exactly what type of content to create to outrank them.`,
+      prompt: `Target Website Profiling:
+URL: ${targetUrl}
+Sector: ${analysis.sectorOfActivity}
+Business Type: ${analysis.businessType}
+Description: ${analysis.businessDescription}
+
+Tracked Search Queries the user wants to rank for:
+${promptResults.map(pr => `- ${pr.prompt} (Competitors appear ${pr.apparitionLikelihood}% of the time)`).join('\n')}
+
+---
+
+COMPETITOR SCRAPED CONTEXT (What currently ranks for these queries):
+${competitorContext ? competitorContext : 'No competitor content could be successfully scraped.'}
+
+---
+
+Design the optimal content strategy (format, structure, and keywords) that this specific business should deploy to capture these search queries. Format your response strictly according to the requested schema.`,
+    });
+
+    console.log(`[Strategy] Content Strategy generation complete.`);
+    return object;
   }
 
   private normalizeUrlForMatch(url: string): string {

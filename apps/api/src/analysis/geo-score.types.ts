@@ -34,6 +34,12 @@ export interface SourcesByDomain {
   category: SourceCategory;
 }
 
+export interface PromptResult {
+  prompt: string;
+  apparitionLikelihood: number;
+  sources: SourcesByDomain[];
+}
+
 export interface GeoScoreResult {
   score: number;
   numSearchPrompts: number;
@@ -41,9 +47,22 @@ export interface GeoScoreResult {
   generatedPrompts: string[];
   analysis?: WebsiteAnalysis;
   sources: SourcesByDomain[];
+  promptResults: PromptResult[];
 }
 
 export interface WebSearchCallResult {
   internalPrompts: string[];
   sources: string[];
+}
+
+export interface ContentStrategy {
+  title: string;
+  targetPlatform: string;
+  targetFormat: string;
+  description: string;
+  structure: {
+    heading: string;
+    description: string;
+  }[];
+  keywords: string[];
 }

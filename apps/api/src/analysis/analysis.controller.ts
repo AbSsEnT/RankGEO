@@ -18,9 +18,17 @@ class GeoScoreDto {
   analysis!: WebsiteAnalysis;
 }
 
+import { PromptResult } from './geo-score.types';
+
+class ContentStrategyDto {
+  url!: string;
+  analysis!: WebsiteAnalysis;
+  promptResults!: PromptResult[];
+}
+
 @Controller('analyze')
 export class AnalysisController {
-  constructor(private readonly analysisService: AnalysisService) {}
+  constructor(private readonly analysisService: AnalysisService) { }
 
   @Post()
   @HttpCode(HttpStatus.OK)
@@ -51,6 +59,20 @@ export class AnalysisController {
       return await this.analysisService.runGeoScorePipeline(url, dto.analysis);
     } catch (e) {
       const message = e instanceof Error ? e.message : 'GEO score failed';
+      throw new BadRequestException(message);
+    }
+  }
+
+  @Post('strategy')
+  @HttpCode(HttpStatus.OK)
+  async generateStrategy(@Body() dto: ContentStrategyDto) {
+    if (!dto?.url || !dto?.analysis || !dto?.promptResults?.length) {
+      throw new BadRequestException('URL, Analysis, and selected PromptResults are required.');
+    }
+    try {
+      return await this.analysisService.generateContentStrategy(dto.url, dto.analysis, dto.promptResults);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Strategy generation failed';
       throw new BadRequestException(message);
     }
   }

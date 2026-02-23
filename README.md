@@ -1,4 +1,4 @@
-# RankGEO
+# RankLM
 
 A tool for marketing agencies to improve GEO (search visibility) for client websites. It analyzes a site’s content, generates realistic user search prompts, and scores how often the site appears when those prompts are run through a search-backed LLM.
 
